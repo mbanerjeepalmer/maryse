@@ -1,66 +1,65 @@
-import httpx
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi.responses import StreamingResponse
 from contextlib import asynccontextmanager
+from playwright.async_api import async_playwright
+import asyncio
 
-# Initialize httpx.AsyncClient as a global reusable client
-client = httpx.AsyncClient(
-    follow_redirects=True,
-    timeout=httpx.Timeout(10.0)
-)
+# Global Playwright context manager
+_pw = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    global _pw
+    # Startup: Initialize Playwright
+    _pw = await async_playwright().start()
     yield
-    # Shutdown: Ensure the httpx client is closed gracefully
-    await client.aclose()
+    # Shutdown: Close Playwright
+    await _pw.stop()
 
-# Initialize FastAPI app with the lifespan manager
 app = FastAPI(lifespan=lifespan)
 
-@app.get("/fetch-html", response_class=HTMLResponse)
-async def fetch_html(url: str = Query(..., description="The URL to fetch")):
+@app.get("/screenshot")
+async def take_screenshot(
+    url: str = Query(..., description="URL of the page to take screenshot of"),
+    full_page: bool = Query(False, description="Whether to take full scrollable page screenshot"),
+    timeout: int = Query(30000, ge=1000, le=60000, description="Page load timeout in milliseconds"),
+    viewport_width: int = Query(1920, ge=100, le=4096, description="Viewport width"),
+    viewport_height: int = Query(1080, ge=100, le=4096, description="Viewport height"),
+    format: str = Query("png", regex="^(png|jpeg)$", description="Image format (png or jpeg)"),
+    quality: int = Query(80, ge=10, le=100, description="Image quality for jpeg (ignored for png)")
+):
     """
-    Fetches the HTML content of a given URL.
+    Takes a screenshot of the given URL and returns the image.
     """
-    if not url.startswith(('http://', 'https://')):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid URL scheme. URL must start with http:// or https://."
-        )
+
+    if not url.startswith(("http", "https")):
+        raise HTTPException(status_code=400, detail="Invalid URL scheme")
 
     try:
-        # Use the global async client to make the request
-        response = await client.get(url)
+        # Launch browser
+        browser = await _pw.chromium.launch(headless=True)
+        page = await browser.new_page()
 
-        # Raise an exception for 4xx/5xx responses from the target URL
-        response.raise_for_status()
+        # Set viewport size
+        await page.set_viewport_size({"width": viewport_width, "height": viewport_height})
 
-        # Return the content
-        return HTMLResponse(
-            content=response.text,
-            status_code=response.status_code
-        )
+        # Navigate to URL
+        await page.goto(url, timeout=timeout, wait_until="networkidle")
 
-    except httpx.HTTPStatusError as e:
-        # Handle errors returned by the target server (e.g., 404, 500)
-        raise HTTPException(
-            status_code=e.response.status_code,
-            detail=f"Error from target server: {e.request.url}"
-        )
-    except httpx.RequestError as e:
-        # Handle network errors (e.g., DNS errors, connection timeouts)
-        raise HTTPException(
-            status_code=504, # Gateway Timeout
-            detail=f"Error connecting to target URL: {e.request.url}"
-        )
+        # Take screenshot
+        img_bytes = await page.screenshot(full_page=full_page, type=format, quality=quality)
+
+        # Close browser
+        await browser.close()
+
+        # Return image
+        media_type = f"image/{format}"
+        return Response(content=img_bytes, media_type=media_type)
+
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Timeout while loading the page")
     except Exception as e:
-        # Catch any other unexpected errors
-        raise HTTPException(
-            status_code=500,
-            detail=f"An unexpected error occurred: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Screenshot failed: {str(e)}")
 
 @app.get("/")
 async def health_check():
