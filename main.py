@@ -2,7 +2,8 @@ import asyncio
 from fastapi import FastAPI, Query, UploadFile, File, HTTPException, Response
 from playwright.async_api import async_playwright
 import openpyxl
-from openpyxl.utils import coordinate_from_string
+from openpyxl.utils.cell import coordinate_from_string  # Correct import for coordinate_from_string
+from openpyxl.utils.exceptions import InvalidFileException  # Correct import for InvalidFileException
 from openpyxl.drawing.image import Image as XLImage
 from PIL import Image as PILImage
 from io import BytesIO
@@ -57,7 +58,7 @@ async def take_screenshot(
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# New endpoint remains the same, using the helper function
+# New endpoint using the helper function
 @app.post("/insert-screenshot")
 async def insert_screenshot(
     spreadsheet: UploadFile = File(..., description="Excel file (.xlsx) to insert screenshot into"),
@@ -80,7 +81,7 @@ async def insert_screenshot(
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Handle spreadsheet modification (unchanged from previous response)
+    # Handle spreadsheet modification
     try:
         # Read uploaded Excel file
         excel_bytes = await spreadsheet.read()
@@ -113,7 +114,7 @@ async def insert_screenshot(
             headers={"Content-Disposition": "attachment; filename=modified_spreadsheet.xlsx"}
         )
     
-    except openpyxl.utils.exceptions.InvalidFileException:
+    except InvalidFileException:
         raise HTTPException(status_code=400, detail="Invalid Excel file uploaded")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to modify spreadsheet: {str(e)}")
