@@ -4,6 +4,13 @@ FROM python:3.11-slim
 # Set the working directory in the container
 WORKDIR /app
 
+# Install system dependencies required for Playwright browsers
+RUN apt-get update && apt-get install -y \
+    wget \
+    gnupg \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install uv using the system pip
 RUN pip install --no-cache-dir uv
 
@@ -19,6 +26,9 @@ COPY requirements.txt .
 
 # Install dependencies using uv
 RUN uv pip install --no-cache -r requirements.txt
+
+# Install Playwright browsers
+RUN playwright install --with-deps chromium
 
 # Copy the application code
 COPY main.py .
